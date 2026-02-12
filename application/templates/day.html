@@ -1,0 +1,15 @@
+<!-- Approved by Avihu -->
+
+{% macro day_card(item) %}
+
+<div class="container border rounded m-2">
+    <img class="p-3 mx-auto d-block" src={{item.icon}}>
+    <div>
+        <div class="fit-content-container p-1">{{item.date}}</div>
+        <div class="fit-content-container p-1">{{item.temp_day}}</div>
+        <div class="fit-content-container p-1">{{item.temp_night}}</div>
+        <div class="fit-content-container p-1">{{item.humidity}}</div>
+    </div>
+</div>
+
+{% endmacro %}

@@ -1,0 +1,26 @@
+# mkdir config logs data
+# nano docker-compose.yml
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: gitlab
+    restart: always
+
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://<GITLAB_SERVER_IP>'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2424
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+
+    ports:
+      - '80:80'
+      - '2424:22'
+
+    volumes:
+      - ./config:/etc/gitlab
+      - ./logs:/var/log/gitlab
+      - ./data:/var/opt/gitlab
+
+    shm_size: '256m'

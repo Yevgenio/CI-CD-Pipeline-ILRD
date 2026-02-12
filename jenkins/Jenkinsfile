@@ -1,0 +1,129 @@
+pipeline {
+    agent { label 'ubuntu' }  
+
+    environment {
+        DOCKER_IMAGE = "yevgenio/weatherapp:latest"
+        APP_EC2 = "ec2-user@<APP_EC2_IP>"
+        TEST_CONTAINER_NAME = "weather-test-${BUILD_NUMBER}" 
+    }
+
+    stages {
+      stage('Install Dependencies') {
+          steps {
+              echo "Installing Python dependencies..."
+              sh """
+                  pip3 install --break-system-packages -r requirements.txt
+              """
+          }
+      }
+
+      stage('Pylint') {
+          steps {
+              echo "Running Pylint..."
+              sh """
+                  pylint *.py --fail-under=5.0
+              """
+          }
+      }
+
+      stage('Unittest') {
+          steps {
+              echo "Running Unittests..."
+              sh "python3 -m unittest tests.py"
+          }
+      }
+ 
+      stage('Build Docker Image') {
+          steps {
+              echo 'Building Docker image...'
+              sh "docker build -t ${DOCKER_IMAGE} ."
+          }
+      }
+ 
+stage('Test Docker Image') {
+    steps {
+        script {
+            try {
+                echo "Cleaning up any existing test containers..."
+                sh "docker stop weather-test-* 2>/dev/null || true"
+                sh "docker rm weather-test-* 2>/dev/null || true"
+                
+                echo "Starting container ${TEST_CONTAINER_NAME} for testing..."
+                sh "docker run -d --name ${TEST_CONTAINER_NAME} -p 8080:8080 ${DOCKER_IMAGE}"  // Changed from 8080:80
+                
+                echo "Waiting for application to start..."
+                sleep 10
+                
+                echo "Testing application reachability..."
+                sh "curl --fail --retry 5 --retry-delay 3 http://localhost:8080/"
+
+                echo "Reachability test passed!"
+
+            } finally {
+                echo "Cleaning up test container..."
+                sh "docker stop ${TEST_CONTAINER_NAME} || true"
+                sh "docker rm ${TEST_CONTAINER_NAME} || true"
+            }
+        }
+    }
+}
+
+      stage('Push to Docker Hub') {
+          steps {
+              withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                  sh '''
+                      echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                      docker push ${DOCKER_IMAGE}
+                  '''
+              }
+          }
+      }
+
+      stage('Deploy to App EC2') {
+          steps {
+              withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', 
+                                  usernameVariable: 'DOCKER_USER', 
+                                  passwordVariable: 'DOCKER_PASS')]) {
+                  sshagent(['ec2-ssh-key']) {
+                      sh """
+                          echo "--> Copying deployment files to ${APP_EC2}..."
+                          scp -o StrictHostKeyChecking=no docker-compose.yml default.conf ${APP_EC2}:~/
+                          
+                          echo "--> Running remote deployment commands on ${APP_EC2}..."
+                          ssh -o StrictHostKeyChecking=no ${APP_EC2} " \\
+                              echo '--> Logging in to Docker Hub...' && \\
+                              echo '${DOCKER_PASS}' | docker login -u '${DOCKER_USER}' --password-stdin && \\
+                              echo '--> Pulling latest images...' && \\
+                              docker-compose pull && \\
+                              echo '--> Starting services...' && \\
+                              docker-compose up -d --remove-orphans && \\
+                              echo 'Deployment with Docker Compose complete!' \\
+                          "
+                      """
+                  }
+              }
+          }
+      }
+    }
+
+    post {
+        success {
+            script {
+                slackSend(
+                    channel: '#weather-jenkins',
+                    color: 'good',
+                    message: "SUCCESS: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' built and deployed successfully. Details: ${env.BUILD_URL}"
+                )
+            }
+        }
+        failure {
+            script {
+                slackSend(
+                    channel: '#weather-jenkins', 
+                    color: 'danger',
+                    message: "FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' failed. Please check the logs for details: ${env.BUILD_URL}"
+                )
+            }
+        }
+    }
+}

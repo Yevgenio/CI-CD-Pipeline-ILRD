@@ -1,0 +1,50 @@
+<!-- Approved by Avihu -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Weather in {{data.location}}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.1/dist/css/bootstrap.min.css" rel="stylesheet" 
+        integrity="sha384-F3w7mX95PdgyTmZZMECAngseQB83DfGTowi0iMjiWaeVhAn4FJkqJByhZMI3AhiU" crossorigin="anonymous">
+    <link rel="stylesheet" href="static/style.css">
+</head>
+    <body class="bg-light">
+        <nav class="navbar">
+            <h1 class="p-4">Weather Tracker</h1>
+        </nav>
+        <main class="container rounded p-3">
+            
+            <div>
+                <h3 class="type">Search weather by location!</h3>
+                <form class="form-control p-2" action="{{ url_for("home")}}" method="post">
+                <!-- <label class="label m-1" for="location">Enter Location: </label> -->
+                <input class="form-control line-input m-1" type="text" id="location" name="location" value="{{location}}" placeholder="enter desired location...">
+                <button class="btn btn-primary weather-btn m-1" type="submit">Search</button>
+            </div>
+            {% if data %}
+                <div class="border rounded bg-white mt-4 p-3">
+                <!-- {% if input_provided %} -->
+                    <!-- {% if data %} -->
+                        <h3 class="p-2">Showing weather forecast for {{data.location}}</h3>
+                        <!-- <p>last updated {{data.timestamp}}</p> -->
+                        <div class="">
+                            <div class="d-flex justify-content-between">
+                                {% from 'day.html' import day_card %}
+                                {% for item in data.forecast %}
+                                    {{ day_card(item) }}
+                                {% endfor %}
+                            </div>
+                        </div>
+                    <!-- {% else %} -->
+                        <!-- <p> Connection to database failed.</p> -->
+                    <!-- {% endif %} -->
+                <!-- {% endif %} -->
+                </div>
+            {% endif %}
+        </main>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.1/dist/js/bootstrap.bundle.min.js" 
+            integrity="sha384-/bQdsTh/da6pkI1MST/rWKFNjaCP5gBSY4sEBT38Q/9RBh9AH40zEOg7Hlq2THRZ" 
+            crossorigin="anonymous"></script>
+    </body>
+</html>

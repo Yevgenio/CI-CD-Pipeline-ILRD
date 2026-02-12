@@ -1,0 +1,11 @@
+services:
+  jenkins-agent:
+    image: jenkins/inbound-agent
+    container_name: jenkins-agent
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - JENKINS_URL=http://<JENKINS_CONTROLLER_IP>:8080
+      - JENKINS_AGENT_NAME=agent-1
+      - JENKINS_SECRET=<JENKINS_AGENT_SECRET>

@@ -1,0 +1,7 @@
+Flask
+requests
+gunicorn
+pytest
+prometheus_client
+pylint
+pylint_flask 

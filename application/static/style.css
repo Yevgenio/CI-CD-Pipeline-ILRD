@@ -1,0 +1,22 @@
+/* Approved by Avihu */
+
+.type {
+    font-size: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    border-right: 5px solid black;
+    animation: 
+        typing 3.5s steps(40, end),
+        blink-caret .75s step-end infinite;
+}
+
+@keyframes typing {
+  from { width: 0 }
+  to { width: 30% }
+}
+
+@keyframes blink-caret {
+  from, to { border-color: transparent }
+  50% { border-color: transparent; }
+}
+

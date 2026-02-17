@@ -2,9 +2,9 @@ pipeline {
     agent { label 'ubuntu' }  
 
     environment {
-        DOCKER_IMAGE = "yevgenio/weatherapp:latest"
-        APP_EC2 = "ec2-user@<APP_EC2_IP>"
-        TEST_CONTAINER_NAME = "weather-test-${BUILD_NUMBER}" 
+        GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        DOCKER_IMAGE     = "yevgenio/weatherapp:${GIT_COMMIT_SHORT}"
+        TEST_CONTAINER_NAME = "weather-test-${BUILD_NUMBER}"
     }
 
     stages {
@@ -21,6 +21,7 @@ pipeline {
           steps {
               echo "Running Pylint..."
               sh """
+                  export PATH=\$HOME/.local/bin:\$PATH
                   pylint *.py --fail-under=5.0
               """
           }
@@ -71,37 +72,23 @@ stage('Test Docker Image') {
       stage('Push to Docker Hub') {
           steps {
               withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                  sh '''
-                      echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                  sh """
+                      echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
                       docker push ${DOCKER_IMAGE}
-                  '''
+                      docker tag ${DOCKER_IMAGE} yevgenio/weatherapp:latest
+                      docker push yevgenio/weatherapp:latest
+                  """
               }
           }
       }
 
-      stage('Deploy to App EC2') {
+      stage('Deploy to EKS') {
           steps {
-              withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', 
-                                  usernameVariable: 'DOCKER_USER', 
-                                  passwordVariable: 'DOCKER_PASS')]) {
-                  sshagent(['ec2-ssh-key']) {
-                      sh """
-                          echo "--> Copying deployment files to ${APP_EC2}..."
-                          scp -o StrictHostKeyChecking=no docker-compose.yml default.conf ${APP_EC2}:~/
-                          
-                          echo "--> Running remote deployment commands on ${APP_EC2}..."
-                          ssh -o StrictHostKeyChecking=no ${APP_EC2} " \\
-                              echo '--> Logging in to Docker Hub...' && \\
-                              echo '${DOCKER_PASS}' | docker login -u '${DOCKER_USER}' --password-stdin && \\
-                              echo '--> Pulling latest images...' && \\
-                              docker-compose pull && \\
-                              echo '--> Starting services...' && \\
-                              docker-compose up -d --remove-orphans && \\
-                              echo 'Deployment with Docker Compose complete!' \\
-                          "
-                      """
-                  }
-              }
+              sh """
+                  kubectl apply -f weatherapp.yaml
+                  kubectl set image deployment/weatherapp weatherapp=${DOCKER_IMAGE}
+                  kubectl rollout status deployment/weatherapp --timeout=120s
+              """
           }
       }
     }

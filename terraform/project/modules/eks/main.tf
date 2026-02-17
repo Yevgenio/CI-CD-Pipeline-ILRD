@@ -1,6 +1,6 @@
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 21.0"
+  version = "~> 21.0" # 21.15.1
 
   name               = var.cluster_name
   kubernetes_version = var.cluster_version
@@ -9,8 +9,19 @@ module "eks" {
   subnet_ids = var.private_subnet_ids
 
   # Access - so you can kubectl from your machine
-  endpoint_public_access                  = true
+  endpoint_public_access                   = true
   enable_cluster_creator_admin_permissions = true
+
+  # Essential cluster addons (required in v21, not self-managed anymore)
+  addons = {
+    vpc-cni = {
+      before_compute = true
+    }
+    kube-proxy = {
+      before_compute = true
+    }
+    coredns = {}
+  }
 
   eks_managed_node_groups = {
     default = {
@@ -20,6 +31,11 @@ module "eks" {
       min_size     = var.node_min_size
       max_size     = var.node_max_size
       desired_size = var.node_desired_size
+
+      metadata_options = {
+        http_tokens                 = "required"
+        http_put_response_hop_limit = 2
+      }
     }
   }
 

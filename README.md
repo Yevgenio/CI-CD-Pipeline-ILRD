@@ -1,16 +1,16 @@
 # WeatherApp - Full CI/CD Pipeline
 
-A Flask-based weather forecast application with a complete CI/CD pipeline, containerized deployment, and AWS infrastructure managed through Terraform.
+A Flask-based weather forecast application with a complete CI/CD pipeline, Kubernetes deployment on EKS, and AWS infrastructure managed through Terraform.
 
 ## Architecture Overview
 
 This project implements a weather forecast web application with end-to-end DevOps infrastructure:
 
 - **Application**: Python/Flask web app that fetches 7-day weather forecasts from the Visual Crossing API, with local JSON caching and Prometheus metrics.
-- **Containerization**: Dockerized with Nginx reverse proxy load-balancing across two Flask/Gunicorn instances.
-- **CI/CD**: Jenkins pipeline that lints, tests, builds, and deploys the Docker image to an EC2 instance via Docker Compose.
-- **Infrastructure**: AWS resources (VPC, EC2, EKS, ALB, Route53, ACM) fully managed with Terraform modules.
-- **Orchestration**: Kubernetes deployment manifests for running on EKS.
+- **Containerization**: Dockerized with Gunicorn, pushed to Docker Hub with git commit SHA tags for traceability.
+- **CI/CD**: Jenkins pipeline that lints, tests, builds, and deploys to EKS using `kubectl`. Images are tagged with git commit SHAs for full traceability.
+- **Infrastructure**: AWS resources (VPC, EC2, EKS, ALB, Route53, ACM) fully managed with modular Terraform.
+- **Orchestration**: Kubernetes deployment on EKS with rolling updates, routed through an ALB via NodePort.
 
 ### Tech Stack
 
@@ -22,13 +22,13 @@ This project implements a weather forecast web application with end-to-end DevOp
 
 **AWS:** VPC, EC2, EKS, ALB, Route53, ACM, NAT Gateway, IAM.
 
-**Containers:** Docker, Docker Compose, Nginx, Kubernetes.
+**Containers:** Docker, Kubernetes (EKS).
 
 ### Pipeline Flow
 
 ```
- Developer        GitLab CE         Jenkins             Docker Hub         AWS
- ────────         ─────────         ───────             ──────────         ───
+ Developer        GitLab CE         Jenkins             Docker Hub         EKS Cluster
+ ────────         ─────────         ───────             ──────────         ───────────
     │                 │                 │                     │               │
     │  git push       │                 │                     │               │
     ├────────────────►│  webhook        │                     │               │
@@ -40,9 +40,11 @@ This project implements a weather forecast web application with end-to-end DevOp
     │                 │                 │  Docker Test        │               │
     │                 │                 │                     │               │
     │                 │                 │  docker push        │               │
+    │                 │                 │  (:commit-sha +     │               │
+    │                 │                 │   :latest)          │               │
     │                 │                 ├────────────────────►│               │
     │                 │                 │                     │               │
-    │                 │                 │  SSH + docker-compose up            │
+    │                 │                 │  kubectl apply + set image          │
     │                 │                 ├────────────────────────────────────►│
     │                 │                 │                     │               │
     │                 │                 │  Slack notification │               │
@@ -61,36 +63,43 @@ This project implements a weather forecast web application with end-to-end DevOp
         │               │                                                         │
         ▼               │   ┌───────────┐               ┌──────────────────┐     │
    Route53 (DNS)        │   │    ALB    │──────────────►│  EKS Cluster     │     │
-   *.source-code.click  │   │           │               │  (WeatherApp     │     │
-        │               │   │  HTTP→    │               │   NodePort 30080)│     │
+   *.source-code.click  │   │           │  NodePort     │  (WeatherApp x2  │     │
+        │               │   │  HTTP→    │  30080        │   port 8080)     │     │
         ▼               │   │  HTTPS    │               └──────────────────┘     │
-   ┌─────────┐          │   │  redirect │               ┌──────────────────┐     │
-   │   ACM   │          │   │           │──────────────►│  GitLab CE       │     │
-   │  (TLS)  │─────────►│   │  Host-    │               └──────────────────┘     │
-   └─────────┘          │   │  based    │               ┌──────────────────┐     │
-                        │   │  routing  │──────────────►│  Jenkins         │     │
-                        │   │           │               │  (controller +   │     │
-                        │   │           │               │   agent)         │     │
+   ┌─────────┐          │   │  redirect │                                        │
+   │   ACM   │          │   │           │               ┌──────────────────┐     │
+   │  (TLS)  │─────────►│   │  Host-    │──────────────►│  GitLab CE       │     │
+   └─────────┘          │   │  based    │  port 80      └──────────────────┘     │
+                        │   │  routing  │               ┌──────────────────┐     │
+                        │   │           │──────────────►│  Jenkins         │     │
+                        │   │           │  port 8080    │  Controller      │     │
                         │   └───────────┘               └──────────────────┘     │
-                        │                                                         │
-                        │   ┌───────────┐               ┌──────────────┐         │
-                        │   │    IGW    │               │  NAT Gateway │         │
-                        │   └───────────┘               │  (egress)    │         │
-                        │                               └──────────────┘         │
+                        │                               ┌──────────────────┐     │
+                        │   ┌───────────┐               │  Jenkins Agent   │     │
+                        │   │    NAT    │               │  (builds +       │     │
+                        │   │  Gateway  │◄──────────────│   deploys to EKS)│     │
+                        │   │  (egress) │               └──────────────────┘     │
+                        │   └───────────┘                                        │
+                        │                               Internal DNS:            │
+                        │   ┌───────────┐               jenkins-controller       │
+                        │   │    IGW    │                 .internal:8080          │
+                        │   └───────────┘                                        │
                         └─────────────────────────────────────────────────────────┘
 ```
 
 ### Design Decisions
 
-**Two deployment strategies** — The project includes two deployment methods using the same Docker image (`yevgenio/weatherapp`):
+**Kubernetes on EKS** — The weather app runs as a 2-replica Deployment with a NodePort Service on the EKS cluster. The ALB routes `app.source-code.click` to the NodePort (30080) on the EKS nodes. This provides self-healing, rolling updates, and horizontal scaling.
 
-1. **Kubernetes on EKS (primary)** — The production deployment. A 2-replica Deployment with a NodePort Service runs on the EKS cluster, routed through the ALB at `app.source-code.click`. This provides self-healing, rolling updates, and horizontal scaling.
+**Git commit SHA image tags** — Docker images are tagged with the short git commit hash (e.g. `yevgenio/weatherapp:2cca0b4`). This ties every deployment to a specific commit for traceability and easy rollbacks. A `latest` tag is also pushed for convenience.
 
-2. **Docker Compose (standalone)** — Included in the `docker/` folder for local development or lightweight single-server deployments. Two Flask/Gunicorn instances sit behind an Nginx reverse proxy. The Jenkins pipeline can also deploy this way to an EC2 instance via SSH.
+**Jenkins agent provisioned via userdata** — The agent EC2 instance is fully bootstrapped through a Terraform-managed userdata script (`jenkins-agent.sh`) that installs Java, Python, pip, Docker, kubectl, and the AWS CLI, then registers the agent with the Jenkins controller via systemd. This means the agent is ready to build and deploy immediately after `terraform apply`.
 
-**Self-hosted GitLab + Jenkins** — All CI/CD tooling runs on infrastructure we control (EC2 instances in private subnets), rather than relying on SaaS platforms. This demonstrates end-to-end infrastructure ownership.
+**Self-hosted GitLab + Jenkins** — All CI/CD tooling runs on infrastructure we control (EC2 instances in private subnets), rather than relying on SaaS platforms.
 
-**Single NAT Gateway (dev)** — The dev environment uses a single NAT gateway to reduce costs. For production, this can be switched to one NAT per AZ by setting `single_nat_gateway = false` in `terraform.tfvars`.
+**Single NAT Gateway (dev)** — The dev environment uses a single NAT gateway to reduce costs. For production, switch to one NAT per AZ by setting `single_nat_gateway = false`.
+
+**Private DNS** — A Route53 private hosted zone (`*.internal`) allows instances to communicate by name (e.g. `jenkins-controller.internal:8080`) instead of hardcoded IPs.
 
 ## Project Structure
 
@@ -98,9 +107,12 @@ This project implements a weather forecast web application with end-to-end DevOp
 application/                        # Flask weather application
 ├── main.py                         # Flask routes, input sanitization, Prometheus metrics
 ├── provider.py                     # Weather API integration with caching
-├── secret.py                       # API key (placeholder - replace with your own)
+├── secret.py                       # API key
 ├── tests.py                        # Unit tests (unittest)
 ├── requirements.txt                # Python dependencies
+├── Dockerfile                      # Python 3.9 + Gunicorn (4 workers, port 8080)
+├── Jenkinsfile                     # 7-stage CI/CD pipeline
+├── weatherapp.yaml                 # Kubernetes Deployment + NodePort Service
 ├── templates/
 │   ├── page.html                   # Main page template (Bootstrap 5)
 │   └── day.html                    # Forecast day card macro
@@ -108,28 +120,25 @@ application/                        # Flask weather application
     ├── style.css                   # CSS animations
     └── icons/                      # Weather condition icons (22 PNGs)
 
-docker/                             # Containerization
-├── Dockerfile                      # Python 3.9 + Gunicorn (4 workers, port 8080)
+docker/                             # Standalone Docker Compose deployment
+├── Dockerfile                      # Python 3.9 + Gunicorn
 ├── docker-compose.yml              # 2x Flask instances + Nginx load balancer
-└── default.conf                    # Nginx upstream config for load balancing
+└── default.conf                    # Nginx upstream config
 
-jenkins/                            # CI/CD pipeline
-├── Jenkinsfile                     # 7-stage pipeline (lint → test → build → deploy)
+jenkins/                            # CI/CD server configuration
 ├── controller/
 │   └── docker-compose.yml          # Jenkins LTS server (ports 8080, 50000)
 └── agent/
     ├── docker-compose.yml          # Jenkins inbound agent config
-    ├── Dockerfile                  # Custom agent image with Docker CLI
-    └── agent.sh                    # Systemd service for agent registration
+    └── Dockerfile                  # Custom agent image with Docker CLI
 
 gitlab/                             # Source code management
 └── docker-compose.yml              # GitLab CE self-hosted instance
 
-kubernetes/                         # K8s deployment manifests
+kubernetes/                         # K8s manifests (reference copy)
 └── weatherapp.yaml                 # 2-replica Deployment + NodePort Service (port 30080)
 
 terraform/                          # Infrastructure as Code
-├── terraform.sh                    # Helper script (init, plan, apply, destroy)
 ├── bootstrap/
 │   └── main.tf                     # Remote state backend (S3 + DynamoDB)
 └── project/
@@ -143,9 +152,11 @@ terraform/                          # Infrastructure as Code
     └── modules/
         ├── vpc/                    # VPC, subnets, IGW, NAT, route tables
         ├── eks/                    # EKS cluster + managed node group
-        ├── compute/                # EC2 instances + security groups + IAM
-        ├── dns/                    # Route53 zones + ACM certificate
-        └── alb/                    # Application Load Balancer + target groups
+        ├── compute/                # EC2 instances + security groups + IAM + userdata scripts
+        │   └── scripts/
+        │       └── jenkins-agent.sh  # Agent bootstrap (Java, Python, Docker, kubectl, AWS CLI)
+        ├── dns/                    # Route53 zones + ACM certificate + internal DNS
+        └── alb/                    # Application Load Balancer + host-based routing
 ```
 
 ## Getting Started
@@ -163,18 +174,6 @@ terraform/                          # Infrastructure as Code
   ```
 - **A domain** registered and managed via Route53 (default: `source-code.click`)
 - **A [Visual Crossing Weather API](https://www.visualcrossing.com/) key** (free tier available)
-
-### Placeholders to Replace
-
-Several config files contain `<PLACEHOLDER>` values that must be set before use:
-
-| File | Placeholder | Description |
-|------|-------------|-------------|
-| `application/secret.py` | `YOUR_API_KEY_HERE` | Visual Crossing Weather API key |
-| `jenkins/Jenkinsfile` | `<APP_EC2_IP>` | IP of the EC2 instance running the weather app |
-| `jenkins/agent/docker-compose.yml` | `<JENKINS_CONTROLLER_IP>`, `<JENKINS_AGENT_SECRET>` | Jenkins controller address and agent auth token |
-| `jenkins/agent/agent.sh` | `<JENKINS_CONTROLLER_IP>`, `<JENKINS_AGENT_SECRET>` | Same as above, for the systemd service variant |
-| `gitlab/docker-compose.yml` | `<GITLAB_SERVER_IP>` | IP or domain of the GitLab host |
 
 ### 1. Run the Application Locally
 
@@ -205,12 +204,9 @@ python3 -m unittest tests.py
 pylint *.py --fail-under=5.0
 ```
 
-### 3. Run with Docker Compose
+### 3. Run with Docker Compose (Local Dev)
 
 Build and run the containerized stack (2 Flask instances + Nginx load balancer):
-
-> [!NOTE]
-> The Dockerfile uses `COPY . /code`, so it expects the application source files as the build context. When building from the `docker/` directory, point the context to `../application/`.
 
 ```bash
 cd docker
@@ -220,19 +216,13 @@ docker-compose up -d
 
 The app will be available at `http://localhost:80` with load balancing across two instances.
 
-To stop:
-
-```bash
-docker-compose down
-```
-
 ## Infrastructure Setup (Terraform)
 
 The infrastructure is organized into reusable modules and deployed to AWS `us-east-1`.
 
 ### Step 1: Bootstrap Remote State
 
-This creates the S3 bucket and DynamoDB table used for Terraform state management:
+Creates the S3 bucket and DynamoDB table for Terraform state management:
 
 ```bash
 cd terraform/bootstrap
@@ -251,21 +241,23 @@ terraform apply
 
 This provisions the full environment:
 
-| Module    | Resources                                                                 |
-|-----------|---------------------------------------------------------------------------|
-| **VPC**   | VPC (10.0.0.0/16), 2 public + 2 private subnets, IGW, NAT Gateway       |
-| **EKS**   | Kubernetes 1.31 cluster, managed node group (2-4 t3.medium nodes)        |
-| **Compute** | 3 EC2 instances: gitlab, jenkins-controller, jenkins-agent |
-| **DNS**   | Route53 hosted zone, wildcard ACM certificate, public + private DNS records |
-| **ALB**   | Application Load Balancer with host-based routing, HTTP-to-HTTPS redirect   |
+| Module      | Resources                                                                 |
+|-------------|---------------------------------------------------------------------------|
+| **VPC**     | VPC (10.0.0.0/16), 2 public + 2 private subnets, IGW, NAT Gateway       |
+| **EKS**     | Kubernetes 1.32 cluster, managed node group (2-4 t3.medium nodes)        |
+| **Compute** | 3 EC2 instances: GitLab, Jenkins controller, Jenkins agent (with userdata) |
+| **DNS**     | Route53 hosted zone, wildcard ACM certificate, public + private DNS records |
+| **ALB**     | Application Load Balancer with host-based routing, HTTP-to-HTTPS redirect |
 
 ### Network Architecture
 
 - All EC2 and EKS instances run in **private subnets** with NAT egress.
 - The ALB sits in **public subnets** and routes traffic by subdomain:
-  - `app.source-code.click` / `eks.source-code.click` -> EKS WeatherApp (NodePort 30080)
-  - `gitlab.source-code.click` -> GitLab (port 80)
-  - `jenkins.source-code.click` -> Jenkins controller (port 8080)
+  - `app.source-code.click` / `eks.source-code.click` → EKS WeatherApp (NodePort 30080)
+  - `gitlab.source-code.click` → GitLab (port 80)
+  - `jenkins.source-code.click` → Jenkins controller (port 8080)
+- Jenkins agent communicates with the controller via **private DNS** (`jenkins-controller.internal:8080`).
+- Jenkins agent has **IAM-based EKS access** — no credentials stored, authentication is through the instance's IAM role.
 
 ### Environment Configuration
 
@@ -280,117 +272,58 @@ public_subnet_cidrs      = ["10.0.1.0/24", "10.0.2.0/24"]
 private_subnet_cidrs     = ["10.0.11.0/24", "10.0.12.0/24"]
 single_nat_gateway       = true
 cluster_name             = "dev-eks"
-cluster_version          = "1.31"
+cluster_version          = "1.32"
 node_instance_types      = ["t3.medium"]
 node_min_size            = 2
 node_max_size            = 4
 node_desired_size        = 2
 ```
 
-To tear down:
-
-```bash
-terraform destroy
-```
-
 ## CI/CD Pipeline (Jenkins)
-
-### Setting Up Jenkins
-
-1. **Deploy Jenkins controller:**
-
-```bash
-cd jenkins/controller
-docker-compose up -d
-```
-
-Access Jenkins at `http://<server-ip>:8080`. Retrieve the initial admin password:
-
-```bash
-docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
-```
-
-2. **Install required plugins:**
-
-   From *Manage Jenkins > Plugins*, install:
-   - **Docker Pipeline** — for building and pushing Docker images
-   - **SSH Agent** — for SSH-based deployment to EC2
-   - **Slack Notification** — for build status alerts to the `#weather-jenkins` channel
-
-3. **Connect a build agent:**
-
-Update `<JENKINS_CONTROLLER_IP>` and `<JENKINS_AGENT_SECRET>` in `jenkins/agent/docker-compose.yml`, then:
-
-```bash
-cd jenkins/agent
-docker-compose up -d
-```
-
-The agent secret is generated by Jenkins when you create a new node under *Manage Jenkins > Nodes*.
-
-Alternatively, use `agent.sh` to register the agent as a systemd service.
-
-4. **Configure Jenkins credentials:**
-
-   Add the following under *Manage Jenkins > Credentials*:
-   - `dockerhub-creds` (Username with password) — Docker Hub account for image push
-   - `ec2-ssh-key` (SSH Username with private key) — SSH key for deployment to the app EC2 instance
 
 ### Pipeline Stages
 
-The `jenkins/Jenkinsfile` defines a 7-stage pipeline:
+The `application/Jenkinsfile` defines a 7-stage pipeline:
 
 | Stage | Description |
 |-------|-------------|
-| **Install Dependencies** | `pip install -r requirements.txt` |
+| **Install Dependencies** | `pip3 install -r requirements.txt` |
 | **Pylint** | Code quality gate (minimum score: 5.0) |
 | **Unittest** | Runs `python3 -m unittest tests.py` |
-| **Build Docker Image** | Builds `yevgenio/weatherapp:latest` |
+| **Build Docker Image** | Builds `yevgenio/weatherapp:<git-commit-sha>` |
 | **Test Docker Image** | Spins up container, health-checks port 8080 |
-| **Push to Docker Hub** | Authenticates and pushes the image |
-| **Deploy to App EC2** | SCPs compose files, runs `docker-compose up -d` on the target EC2 |
+| **Push to Docker Hub** | Pushes both `:<commit-sha>` and `:latest` tags |
+| **Deploy to EKS** | `kubectl apply` + `kubectl set image` + `kubectl rollout status` |
 
 Post-build notifications are sent to a `#weather-jenkins` Slack channel on success or failure.
 
+### Jenkins Setup
+
+1. **Jenkins controller** runs on an EC2 instance, accessible at `jenkins.source-code.click`.
+
+2. **Jenkins agent** is automatically provisioned via Terraform userdata (`compute/scripts/jenkins-agent.sh`). On first boot, the agent installs all required tools (Java, Python, pip, Docker, kubectl, AWS CLI), configures kubeconfig for EKS, and registers itself with the controller as a systemd service.
+
+3. **Required Jenkins credentials:**
+   - `dockerhub-creds` (Username with password) — Docker Hub account for image push
+
+4. **Required Jenkins plugins:**
+   - Docker Pipeline
+   - Slack Notification
+
 ## GitLab Setup
 
-Deploy a self-hosted GitLab CE instance:
-
-```bash
-cd gitlab
-mkdir config logs data
-```
-
-> [!NOTE]
-> Update `<GITLAB_SERVER_IP>` in `docker-compose.yml` to match your server's IP or domain before starting.
-
-```bash
-docker-compose up -d
-```
-
-Access GitLab at `http://<server-ip>:80`. The initial root password can be retrieved with:
-
-```bash
-docker exec gitlab cat /etc/gitlab/initial_root_password
-```
-
-GitLab SSH is available on port **2424** (to avoid conflict with the host SSH on port 22).
+GitLab CE runs on a dedicated EC2 instance, accessible at `gitlab.source-code.click`. SSH is available on port **2424** (to avoid conflict with the host SSH on port 22).
 
 ## Kubernetes Deployment
 
-To deploy the weather app on the EKS cluster:
+The weather app is deployed to EKS automatically by the Jenkins pipeline. The manifest (`application/weatherapp.yaml`) defines:
 
-```bash
-# Configure kubectl for the EKS cluster
-aws eks update-kubeconfig --name dev-eks --region us-east-1
+- **Deployment**: 2 replicas of the weather app container (port 8080)
+- **Service**: NodePort type, mapping port 80 → 8080, exposed on nodePort 30080
 
-# Deploy the application
-kubectl apply -f kubernetes/weatherapp.yaml
-```
+The ALB routes external traffic from `app.source-code.click` to the NodePort on the EKS nodes.
 
-This creates a 2-replica Deployment exposed via a NodePort Service on port 30080, accessible through the ALB at `eks.source-code.click`.
-
-Verify the deployment:
+To manually check the deployment:
 
 ```bash
 kubectl get pods -l app=weatherapp

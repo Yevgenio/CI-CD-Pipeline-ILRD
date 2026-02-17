@@ -25,15 +25,14 @@ module "vpc" {
 module "eks" {
   source = "../../modules/eks"
 
-  cluster_name        = var.cluster_name
-  cluster_version     = var.cluster_version
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnet_ids
-  node_instance_types = var.node_instance_types
-  node_min_size       = var.node_min_size
-  node_max_size       = var.node_max_size
-  node_desired_size   = var.node_desired_size
-
+  cluster_name           = var.cluster_name
+  cluster_version        = var.cluster_version
+  vpc_id                 = module.vpc.vpc_id
+  private_subnet_ids     = module.vpc.private_subnet_ids
+  node_instance_types    = var.node_instance_types
+  node_min_size          = var.node_min_size
+  node_max_size          = var.node_max_size
+  node_desired_size      = var.node_desired_size
   tags = {
     Owner = "Yevgeni"
     Cost  = "${var.environment}-environment"
@@ -104,4 +103,41 @@ resource "aws_security_group_rule" "alb_to_eks_nodes" {
   protocol                 = "tcp"
   security_group_id        = module.eks.node_security_group_id
   source_security_group_id = module.alb.alb_security_group_id
+}
+
+# Allow Jenkins agent to reach EKS API server
+resource "aws_security_group_rule" "jenkins_to_eks_api" {
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = module.eks.cluster_security_group_id
+  source_security_group_id = module.compute.security_group_id
+}
+
+# Grant Jenkins agent access to deploy to the EKS cluster
+resource "aws_eks_access_entry" "jenkins_agent" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = module.compute.ssm_role_arn
+}
+
+resource "aws_eks_access_policy_association" "jenkins_agent_admin" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = module.compute.ssm_role_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.jenkins_agent]
+}
+
+# Update local kubeconfig after EKS cluster is created
+resource "null_resource" "update_local_kubeconfig" {
+  provisioner "local-exec" {
+    command     = "aws eks update-kubeconfig --region us-east-1 --name ${var.cluster_name}"
+    interpreter = ["/bin/bash", "-c"]
+  }
+  depends_on = [module.eks]
 }

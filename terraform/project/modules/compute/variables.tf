@@ -8,13 +8,27 @@ variable "private_subnet_ids" {
   type        = list(string)
 }
 
-variable "single_az_amis" {
-  description = "AMIs to place in a single AZ (first private subnet)"
-  type        = map(list(string))
+variable "single_az_instances" {
+  description = "Instances to place in a single AZ (first private subnet). Set user_data_file to a script filename in the scripts/ directory."
+  type = map(object({
+    ami            = string
+    instance_type  = string
+    user_data_file = optional(string, "")
+  }))
   default = {
-    gitlab             = ["ami-0026aef282f0bc395", "t3.medium"]
-    jenkins-controller = ["ami-07741070b4cf87861", "t3.small"]
-    jenkins-agent      = ["ami-023a0393c18d28370", "t3.small"]
+    gitlab = {
+      ami           = "ami-0026aef282f0bc395"
+      instance_type = "t3.medium"
+    }
+    jenkins-controller = {
+      ami           = "ami-07741070b4cf87861"
+      instance_type = "t3.small"
+    }
+    jenkins-agent = {
+      ami            = "ami-0b6c6ebed2801a5cb" #ami-0b6c6ebed2801a5cb = default ubuntu
+      instance_type  = "t3.small"
+      user_data_file = "jenkins-agent.sh"
+    }
   }
 }
 

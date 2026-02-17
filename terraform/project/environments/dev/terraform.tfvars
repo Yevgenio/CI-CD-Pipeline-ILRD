@@ -13,8 +13,9 @@ single_nat_gateway = true
 
 # EKS configuration
 cluster_name        = "dev-eks"
-cluster_version     = "1.31"
+cluster_version     = "1.35"
 node_instance_types = ["t3.medium"]
 node_min_size       = 2
 node_max_size       = 4
 node_desired_size   = 2
+

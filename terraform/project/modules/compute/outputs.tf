@@ -28,3 +28,8 @@ output "security_group_id" {
   description = "Compute security group ID"
   value       = aws_security_group.my_sg.id
 }
+
+output "ssm_role_arn" {
+  description = "ARN of the EC2 SSM/Jenkins agent IAM role"
+  value       = aws_iam_role.ssm_role.arn
+}

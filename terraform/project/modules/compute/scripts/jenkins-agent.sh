@@ -41,23 +41,46 @@ for i in {1..5}; do
     }
 done
 
-# Install Java with retry logic
-echo "Installing Java..."
+# Install Java and pipeline dependencies
+echo "Installing Java, Python, pip, and Docker..."
 for i in {1..5}; do
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-17-jre && break || {
-        echo "Java installation failed, retrying in 10s..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        openjdk-17-jre \
+        python3 \
+        python3-pip \
+        docker.io \
+        && break || {
+        echo "Installation failed, retrying in 10s..."
         sleep 10
     }
 done
 
-# Verify Java installation
-if ! command -v java &> /dev/null; then
-    echo "ERROR: Java installation failed after all retries!"
-    exit 1
-fi
-
-echo "Java installed successfully:"
+# Verify installations
+echo "Verifying installations..."
 java -version
+python3 --version
+pip3 --version
+docker --version
+
+# Add ubuntu user to docker group so pipeline can run docker commands
+sudo usermod -aG docker ubuntu
+
+# Install AWS CLI
+echo "Installing AWS CLI..."
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp
+sudo /tmp/aws/install
+rm -rf /tmp/awscliv2.zip /tmp/aws
+aws --version
+
+# Install kubectl
+echo "Installing kubectl..."
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y kubectl
+kubectl version --client
 
 # Create Jenkins agent directory AS UBUNTU USER
 echo "Creating agent directory..."
@@ -119,5 +142,21 @@ sleep 5
 
 echo "Jenkins agent setup complete!"
 sudo systemctl status jenkins-agent --no-pager
+
+# Wait for EKS cluster to be ready, then configure kubeconfig
+echo "Waiting for EKS cluster to become ACTIVE..."
+for i in {1..60}; do
+    STATUS=$(aws eks describe-cluster --name dev-eks --region us-east-1 --query 'cluster.status' --output text 2>/dev/null)
+    if [ "$STATUS" = "ACTIVE" ]; then
+        echo "EKS cluster is ACTIVE!"
+        break
+    else
+        echo "Cluster status: $STATUS - waiting... attempt $i/60"
+        sleep 30
+    fi
+done
+
+echo "Configuring kubeconfig for EKS..."
+sudo -u ubuntu aws eks update-kubeconfig --name dev-eks --region us-east-1
 
 echo "Setup finished at $(date)"
